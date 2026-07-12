@@ -46,6 +46,18 @@ app.get("/api/btc", async (req, res) => {
   }
 });
 
+app.get("/api/debug", async (req, res) => {
+  try {
+    const evRes = await fetch(
+      `${KALSHI_BASE}/events?series_ticker=${SERIES}&status=open&with_nested_markets=true`
+    );
+    const evData = await evRes.json();
+    res.json(evData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Pulse BTC live server running on port ${PORT}`);
 });
