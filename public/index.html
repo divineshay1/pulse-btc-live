@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pulse BTC — Live</title>
+<style>
+  :root { --pink:#FF4FA3; --purple:#8A2BE2; --charcoal:#121212; --up:#3DDC97; --down:#FF5C5C; }
+  * { box-sizing: border-box; margin:0; padding:0; }
+  body {
+    background: var(--charcoal);
+    background-image: radial-gradient(circle at 15% 10%, rgba(255,79,163,0.12), transparent 40%),
+                       radial-gradient(circle at 85% 40%, rgba(138,43,226,0.15), transparent 45%);
+    color: #F4F2F6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    min-height: 100vh; padding-bottom: 60px;
+  }
+  .mono { font-family: "SF Mono", Menlo, ui-monospace, monospace; }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 0 20px; }
+  .glass-strong { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 20px; }
+  .glass { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; }
+  .gradient-text { background: linear-gradient(135deg, var(--pink), #C46FE0, var(--purple)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header { padding: 24px 0 8px; }
+  .header-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .logo { font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--pink); animation: ping 2s infinite; }
+  @keyframes ping { 0%{box-shadow:0 0 0 0 rgba(255,79,163,.5);} 70%{box-shadow:0 0 0 9px rgba(255,79,163,0);} 100%{box-shadow:0 0 0 0 rgba(255,79,163,0);} }
+  .status { font-size: 12px; color: rgba(255,255,255,0.4); }
+  .status.live { color: var(--up); }
+  .status.err { color: var(--down); }
+  .refresh-btn {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white;
+    padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  .top-row { display: flex; justify-content: space-between; align-items: center; margin: 20px 0; flex-wrap: wrap; gap: 10px; }
+  .pred-card { padding: 24px; margin-bottom: 16px; }
+  .row { display: flex; justify-content: space-between; align-items: flex-start; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: rgba(255,255,255,0.4); }
+  .divider { height: 1px; background: rgba(255,255,255,0.1); margin: 18px 0; }
+  .pressure-labels { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .pressure-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.05); }
+  .payouts { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.5); }
+  .empty-state, .error-state { text-align: center; padding: 50px 20px; color: rgba(255,255,255,0.4); font-size: 14px; }
+  .error-state { color: var(--down); }
+  .loading { text-align: center; padding: 40px; color: rgba(255,255,255,0.5); font-size: 14px; }
+  .meta-line { font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <div class="header-row">
+    <div class="logo"><span class="dot"></span> Pulse <span class="gradient-text">&nbsp;BTC</span></div>
+    <div id="status" class="status">Connecting…</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="top-row">
+    <div style="font-size:13px; color:rgba(255,255,255,0.5);">Live BTC 15-min market, via your own server.</div>
+    <button class="refresh-btn" onclick="loadMarket()">↻ Refresh</button>
+  </div>
+  <div id="content"><div class="loading">Loading live BTC market…</div></div>
+</main>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const contentEl = document.getElementById('content');
+  let closeTime = null;
+  let timerId = null;
+
+  function centsToDisplay(c) {
+    return (c === null || c === undefined) ? "—" : Math.round(c) + "¢";
+  }
+  function payout(cents) {
+    return cents ? (100 / cents).toFixed(2) + "x" : "—";
+  }
+  function fmtCountdown(ms) {
+    if (ms <= 0) return "closed";
+    const totalSec = Math.floor(ms / 1000);
+    const m = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  async function loadMarket() {
+    statusEl.textContent = "Connecting…";
+    statusEl.className = "status";
+    if (timerId) clearInterval(timerId);
+
+    try {
+      const res = await fetch('/api/btc');
+      if (!res.ok) throw new Error("server returned " + res.status);
+      const data = await res.json();
+
+      if (!data.open) {
+        contentEl.innerHTML = '<div class="empty-state">No open BTC 15-min market right now — a new one opens every 15 minutes.</div>';
+        statusEl.textContent = "Connected — no open market";
+        statusEl.className = "status live";
+        return;
+      }
+
+      closeTime = data.close_time ? new Date(data.close_time) : null;
+      statusEl.textContent = "● Live";
+      statusEl.className = "status live";
+
+      contentEl.innerHTML = `
+        <div class="pred-card glass-strong">
+          <div class="row">
+            <div>
+              <div class="label">${data.title}</div>
+              <div class="meta-line">${data.ticker} · volume ${data.volume}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="label">Closes in</div>
+              <div class="mono" id="countdown" style="font-size:16px; font-weight:600;">--:--</div>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="pressure-labels">
+            <span style="color:var(--up);">Yes ${centsToDisplay(data.yes_bid)}–${centsToDisplay(data.yes_ask)}</span>
+            <span style="color:var(--down);">No ${centsToDisplay(data.no_bid)}–${centsToDisplay(data.no_ask)}</span>
+          </div>
+          <div class="pressure-bar">
+            <div style="width:${data.yes_ask || 50}%; background: linear-gradient(90deg,#3DDC97,#34d399);"></div>
+            <div style="width:${100 - (data.yes_ask || 50)}%; background: linear-gradient(90deg,#f43f5e,#FF5C5C);"></div>
+          </div>
+          <div class="payouts">
+            <span>Payout if Yes: ${payout(data.yes_ask)}</span>
+            <span>Payout if No: ${payout(data.no_ask)}</span>
+          </div>
+        </div>
+        <div class="glass" style="padding:16px; font-size:12px; color:rgba(255,255,255,0.5); line-height:1.6;">
+          Real live prices from Kalshi, fetched by your server. No model or signal layered on —
+          apply your own entry/exit rules against these numbers.
+        </div>
+      `;
+
+      if (closeTime) {
+        timerId = setInterval(() => {
+          const remain = closeTime - new Date();
+          const cd = document.getElementById('countdown');
+          if (cd) cd.textContent = fmtCountdown(remain);
+          if (remain <= 0) { clearInterval(timerId); loadMarket(); }
+        }, 1000);
+      }
+
+    } catch (err) {
+      statusEl.textContent = "Connection failed";
+      statusEl.className = "status err";
+      contentEl.innerHTML = `<div class="error-state">Couldn't reach the server (${err.message}). If this is your first load after deploying, wait 30-60s for Render's free tier to wake up, then hit Refresh.</div>`;
+    }
+  }
+
+  loadMarket();
+  setInterval(loadMarket, 60000);
+</script>
+
+</body>
+</html>
